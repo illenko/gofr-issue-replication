@@ -1,61 +1,82 @@
 package main
 
 import (
+	"encoding/json"
+	"github.com/confluentinc/confluent-kafka-go/kafka"
+	"time"
+
+	"github.com/google/uuid"
 	"gofr.dev/pkg/gofr"
-	"gofr.dev/pkg/gofr/migration"
 )
 
 type transaction struct {
-	Id    int
-	Title string
+	ID       uuid.UUID `json:"id"`
+	Datetime time.Time `json:"datetime"`
+	Amount   float64   `json:"amount"`
+	Category string    `json:"category"`
+	Country  string    `json:"country"`
 }
 
 func main() {
+
 	app := gofr.New()
 
-	app.Migrate(map[int64]migration.Migrate{
-		20240426170000: {
-			UP: func(d migration.Datasource) error {
-				d.SQL.Exec(`create table transaction (id integer, title varchar);`)
-				d.SQL.Exec(`insert into transaction (id, title) values (1, 'transaction 1');`)
-				return nil
-			},
-		},
-	})
+	//app.POST("/transactions", func(ctx *gofr.Context) (interface{}, error) {
+	//
+	//	var data []transaction
+	//
+	//	err := ctx.Bind(&data)
+	//	if err != nil {
+	//		return nil, err
+	//	}
+	//
+	//	for _, t := range data {
+	//		msg, err := json.Marshal(t)
+	//		if err != nil {
+	//			return nil, err
+	//		}
+	//
+	//		err = ctx.GetPublisher().Publish(ctx, "transactions", msg)
+	//		if err != nil {
+	//			return nil, err
+	//		}
+	//	}
+	//
+	//	return "Published", nil
+	//})
 
-	app.Subscribe("transaction-topic", func(c *gofr.Context) error {
+	p, err := kafka.NewProducer(&kafka.ConfigMap{"bootstrap.servers": "localhost:9092"})
 
-		rows, _ := c.SQL.QueryContext(c, "SELECT id, title FROM transaction")
+	if err != nil {
+		panic(err)
+	}
 
-		for rows.Next() {
-			var t transaction
-			rows.Scan(&t.Id, &t.Title)
+	app.POST("/transactions", func(ctx *gofr.Context) (interface{}, error) {
 
-			c.Logger.Info("Read transaction", t)
+		var data []transaction
+
+		err := ctx.Bind(&data)
+		if err != nil {
+			return nil, err
 		}
 
-		defer rows.Close()
+		for _, t := range data {
+			msg, err := json.Marshal(t)
+			if err != nil {
+				return nil, err
+			}
 
-		return nil
-	})
+			topic := "transactions"
 
-	app.GET("/transactions", func(c *gofr.Context) (interface{}, error) {
-		var transactions []transaction
-
-		rows, _ := c.SQL.QueryContext(c, "SELECT id, title FROM transaction")
-
-		for rows.Next() {
-			var t transaction
-			rows.Scan(&t.Id, &t.Title)
-
-			c.Logger.Info("Read transaction", t)
-
-			transactions = append(transactions, t)
+			p.Produce(&kafka.Message{
+				TopicPartition: kafka.TopicPartition{Topic: &topic, Partition: kafka.PartitionAny},
+				Value:          msg},
+				nil,
+			)
 		}
 
-		defer rows.Close()
-
-		return transactions, nil
+		return "Published", nil
 	})
+
 	app.Run()
 }
